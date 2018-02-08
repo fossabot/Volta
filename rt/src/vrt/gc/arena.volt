@@ -340,6 +340,7 @@ protected:
 			gcAssert(obj !is null);
 			obj.__dtor();
 		}
+		__llvm_memset(large.extent.ptr, 0, large.extent.size, 0, false);
 		mManager.freeLargeStructAndMem(large);
 	}
 
