@@ -1,12 +1,24 @@
 module test;
 
 import vrt.gc.slab;
+import vrt.ext.stdc;
 
 
 fn main() i32
 {
+	/* The slab is in charge of zeroing memory on free,
+	 * so we need to give our test Slab real memory to
+	 * manage.
+	 */
+	order := sizeToOrder(512);
+	size := orderToSize(order) * Slab.MaxSlots;
+	memory := calloc(1, size);
+	if (memory is null) {
+		return 5;
+	}
+
 	block: Slab;
-	block.setup(0, null, false, false, false);
+	block.setup(order, memory, false, false, false);
 
 	// Allocate 511 blocks, check that one is left.
 	foreach (0 .. 511) {
@@ -32,6 +44,8 @@ fn main() i32
 	if (block.isFree(5) != true) {
 		return 4;
 	}
+
+	free(memory);
 
 	return 0;
 }
