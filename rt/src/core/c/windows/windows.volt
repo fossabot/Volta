@@ -744,6 +744,9 @@ fn CreateMutexA(LPSECURITY_ATTRIBUTES, BOOL, LPCSTR) HANDLE;
 fn CreateMutexW(LPSECURITY_ATTRIBUTES, BOOL, LPCWSTR) HANDLE;
 fn ReleaseMutex(HANDLE) BOOL;
 
+alias LPTHREAD_START_ROUTINE = fn(LPVOID) DWORD;
+fn CreateThread(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD) HANDLE;
+
 
 // Helper functions needs to be marked with extern volt so
 // they do not collide with other C function with similar names.
