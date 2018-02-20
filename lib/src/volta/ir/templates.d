@@ -37,9 +37,14 @@ class TemplateInstance : Node
 public:
 	TemplateKind kind;
 	QualifiedName name;
+	string instanceName;
 	Node[] arguments;  // Either a Type or an Exp.
 	bool explicitMixin;
 	string[] names;  // Set by the lifter.
+	Scope myScope;  // Set by gatherer.
+
+	Struct _struct;
+	Function _function;
 
 public:
 	this()
@@ -54,6 +59,11 @@ public:
 		this.name = old.name;
 		this.arguments = old.arguments.dup();
 		this.names = old.names.dup();
+		this.instanceName = old.instanceName;
+		this.explicitMixin = old.explicitMixin;
+		this.myScope = old.myScope;
+		this._struct = old._struct;
+		this._function = old._function;
 	}
 }
 

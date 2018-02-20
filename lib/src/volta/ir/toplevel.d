@@ -417,8 +417,6 @@ public:
 
 	bool isFinal;
 
-	TemplateInstance templateInstance;  //!< Optional. Non-null if this is a template instantiation.
-
 public:
 	this() { super(NodeType.Class); }
 
@@ -443,7 +441,6 @@ public:
 		this.isObject = old.isObject;
 		this.isAbstract = old.isAbstract;
 		this.isFinal = old.isFinal;
-		this.templateInstance = old.templateInstance;
 	}
 }
 
@@ -464,8 +461,6 @@ public:
 	//! How a lowered interface will look internally.
 	Struct layoutStruct;
 
-	TemplateInstance templateInstance;  //!< Optional. Non-null if this is a template instantiation.
-
 public:
 	this() { super(NodeType.Interface); }
 
@@ -476,7 +471,6 @@ public:
 		this.parentInterfaces = old.parentInterfaces.dup();
 
 		this.layoutStruct = old.layoutStruct;
-		this.templateInstance = old.templateInstance;
 	}
 }
 
@@ -495,8 +489,6 @@ class Union : PODAggregate
 public:
 	size_t totalSize; // Total size in memory.
 
-	TemplateInstance templateInstance;  //!< Optional. Non-null if this is a template instantiation.
-
 public:
 	this() { super(NodeType.Union); }
 
@@ -504,7 +496,6 @@ public:
 	{
 		super(NodeType.Union, old);
 		this.totalSize = old.totalSize;
-		this.templateInstance = old.templateInstance;
 	}
 }
 
@@ -522,8 +513,7 @@ class Struct : PODAggregate
 {
 public:
 	Node loweredNode;  //!< If not null, this struct was lowered from this.
-
-	TemplateInstance templateInstance;  //!< Optional. Non-null if this is a template instantiation.
+	TemplateInstance templateInstance;  //!< Filled in by the lifter, if instantiated from a template.
 
 public:
 	this() { super(NodeType.Struct); }

@@ -127,7 +127,7 @@ void checkInvalid(ir.Scope current, ir.Node n, string name, ErrorSink errSink)
 void checkTemplateRedefinition(ir.Scope current, string name, ErrorSink errSink)
 {
 	auto store = current.getStore(name);
-	if (store !is null && store.kind == ir.Store.Kind.Type) {
+	if (store !is null && (store.kind == ir.Store.Kind.Type || store.kind == ir.Store.Kind.TemplateInstance)) {
 		errorMsg(errSink, store.node, format("'%s' is already defined in this scope.", name));
 		return;
 	}
@@ -308,6 +308,18 @@ void gather(ir.Scope current, ir.TemplateDefinition td, Where where, ErrorSink e
 	if (status != ir.Status.Success) {
 		panic(errSink, td, "template redefinition");
 		return;
+	}
+}
+
+void gather(ir.Scope current, ir.TemplateInstance ti, Where where, ErrorSink errSink)
+{
+	checkInvalid(current, ti, ti.instanceName, errSink);
+	checkTemplateRedefinition(current, ti.instanceName, errSink);
+	ir.Status status;
+	current.addTemplateInstance(ti, /*#out*/status);
+	ti.myScope = current;
+	if (status != ir.Status.Success) {
+		panic(errSink, ti, "template redefinition");
 	}
 }
 
@@ -761,6 +773,12 @@ public:
 	override Status enter(ir.EnumDeclaration e)
 	{
 		gather(current, e, where, mErrSink);
+		return Continue;
+	}
+
+	override Status enter(ir.TemplateInstance ti)
+	{
+		gather(current, ti, where, mErrSink);
 		return Continue;
 	}
 

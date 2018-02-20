@@ -319,7 +319,11 @@ ir.Function lookupFunction(LanguagePass lp, ir.Scope _scope, ref in Location loc
 ir.Type lookupType(LanguagePass lp, ir.Scope _scope, ir.QualifiedName id)
 {
 	auto store = lookup(lp, _scope, id);
+	return lookupType(lp, _scope, id, store);
+}
 
+ir.Type lookupType(LanguagePass lp, ir.Scope _scope, ir.QualifiedName id, ir.Store store)
+{
 	// If we can't find it, try and generate a sensible error.
 	if (store is null) {
 		string lastName;
@@ -398,6 +402,7 @@ ir.Store ensureResolved(LanguagePass lp, ir.Store s)
 			lp.resolveNamed(i);
 		}
 		return s;
+	case TemplateInstance:
 	case Scope:
 	case Template:
 	case FunctionParam:

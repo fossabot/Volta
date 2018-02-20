@@ -829,21 +829,12 @@ Visitor.Status acceptStruct(ir.Struct s, Visitor av)
 		return parentContinue(status);
 	}
 
-	if (s.templateInstance !is null) {
-		// TODO: Do this for every template type
-		status = accept(s.templateInstance, av);
-		if (status == VisitorStop) {
-			return VisitorStop;
-		}
-	}
-
 	if (s.members !is null) {
 		status = accept(s.members, av);
 		if (status == VisitorStop) {
 			return VisitorStop;
 		}
 	}
-
 	return av.leave(s);
 }
 
@@ -2344,19 +2335,18 @@ Visitor.Status acceptIdentifierExp(ref ir.Exp exp, ir.IdentifierExp identifier, 
 
 Visitor.Status acceptTemplateInstance(ir.TemplateInstance ti, Visitor av)
 {
+	if (ti._struct !is null) {
+		return accept(ti._struct, av);
+	} else if (ti._function !is null) {
+		return accept(ti._function, av);
+	}
+
 	auto status = av.enter(ti);
 	if (status != VisitorContinue) {
 		return parentContinue(status);
 	}
 
 	foreach (i, arg; ti.arguments) {
-		/+auto exp = cast(ir.Exp)arg; !!! TODO
-		if (exp !is null) {
-			acceptExp(/*#ref*/exp, av);
-			ti.arguments[i] = exp;
-		} else {
-			status = accept(arg, av);
-		}+/
 		if (status == VisitorContinueParent) {
 			continue;
 		} else if (status == VisitorStop) {

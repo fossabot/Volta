@@ -27,6 +27,7 @@ import volt.semantic.extyper;
 import volt.semantic.classify;
 import volt.semantic.typer;
 import volt.semantic.mangle;
+import volt.semantic.typeinfo;
 
 
 class TemplateLifter : Lifter
@@ -362,19 +363,35 @@ public:
 
 
 public:
-	void templateLift(ref ir.Function func, LanguagePass lp, ir.TemplateInstance ti)
+	void templateLift(ir.Scope _current, LanguagePass lp, ir.TemplateInstance ti)
 	{
-		auto current = func.myScope;
-		auto td = getTemplateDefinition(current, lp, ti);
+		switch (ti.kind) with (ir.TemplateKind) {
+		case Struct:
+			templateLiftStruct(_current, lp, ti);
+			break;
+		case Function:
+			templateLiftFunction(_current, lp, ti);
+			break;
+		default:
+			throw makeError(/*#ref*/ti.loc, "non struct/function template");
+		}
+	}
+
+	void templateLiftFunction(ir.Scope _current, LanguagePass lp, ir.TemplateInstance ti)
+	{
+		auto current = ti.myScope;
+		auto td = getNewTemplateDefinition(current, lp, ti);
 		auto deffunc = td._function;
-		panicAssert(func, deffunc !is null);
+		panicAssert(ti, deffunc !is null);
+
+		auto func = lift(deffunc);
+		func.name = ti.instanceName;
+		func.myScope = new ir.Scope(current, func, func.name, current.nestedDepth);
+		ti._function = func;
 
 		currentTemplateDefinitionName = td.name;
 
-		auto processed = processTemplateArguments(lp, func.myScope.parent, func.myScope, td, ti);
-
-		func.copy(/*old*/deffunc, /*liftingTemplate*/true);
-		liftInPlace(deffunc, /*#ref*/func);
+		auto processed = processNewTemplateArguments(lp, func.myScope.parent, func.myScope, td, ti);
 
 		/* The attributes couldn't be applied with the other functions,
 		 * as it didn't have a type at that point. Hide the templateInstance
@@ -398,6 +415,7 @@ public:
 				}
 			}
 		}
+
 		if (func.myScope.parent.node.nodeType != ir.NodeType.Module) {
 			throw makeError(/*#ref*/func.loc, "non top level template function");
 		}
@@ -405,21 +423,34 @@ public:
 		void addNode(ir.Node n) { func.templateAdditions ~= n; }
 		version (D_Version2) auto _dg = &addNode;
 		else auto _dg = addNode;
-		addArgumentsToInstanceEnvironment(lp, processed, func.myScope, td, ti, _dg);
+		addArgumentsToNewInstanceEnvironment(lp, processed, func.myScope, td, ti, _dg);
+		auto store = current.getStore(ti.instanceName);
+		panicAssert(ti, store !is null);
+		panicAssert(ti, store.kind == ir.Store.Kind.TemplateInstance);
+		store.functions = [func];
+		store.kind = ir.Store.Kind.Function;
+		store.name = ti.instanceName;
 	}
 
-	void templateLift(ref ir.Struct s, LanguagePass lp, ir.TemplateInstance ti)
+	void templateLiftStruct(ir.Scope _current, LanguagePass lp, ir.TemplateInstance ti)
 	{
-		auto current = s.myScope;
-		auto td = getTemplateDefinition(current, lp, ti);
+		auto current = ti.myScope;
+		assert(ti.explicitMixin);
+		auto td = getNewTemplateDefinition(current, lp, ti);
 		auto defstruct = td._struct;
-		panicAssert(s, defstruct !is null);
+		panicAssert(ti, defstruct !is null);
+		auto s = new ir.Struct(defstruct);
+		s.name = ti.instanceName;
+		s.templateInstance = ti;
+		assert(s.name !is null);
+		ti._struct = s;
+		s.myScope = new ir.Scope(current, s, s.name, current.nestedDepth);
 
 		currentTemplateDefinitionName = td.name;
-		currentInstanceType = s;
+		currentInstanceType = ti._struct;
 
 		// Make sure we look in the scope where the template inst. is.
-		auto processed = processTemplateArguments(lp, s.myScope.parent, s.myScope, td, ti);
+		auto processed = processNewTemplateArguments(lp, s.myScope.parent, s.myScope, td, ti);
 
 		// Do the lifting of the children.
 		s.members = lift(defstruct.members);
@@ -434,17 +465,20 @@ public:
 		void addNode(ir.Node n) { s.members.nodes ~= n; }
 		version (D_Version2) auto _dg = &addNode;
 		else auto _dg = addNode;
-		addArgumentsToInstanceEnvironment(lp, processed, s.myScope, td, ti, _dg);
+		addArgumentsToNewInstanceEnvironment(lp, processed, s.myScope, td, ti, _dg);
+		ensureMangled(s);
+		ir.Status status;
+		auto store = current.getStore(ti.instanceName);
+		panicAssert(ti, store !is null);
+		panicAssert(ti, store.kind == ir.Store.Kind.TemplateInstance);
+		store.node = s;
+		store.kind = ir.Store.Kind.Type;
+		store.name = ti.instanceName;
+		store.myScope = s.myScope;
 	}
 
 private:
-	bool isTemplateInstance(ir.Type t)
-	{
-		auto _struct = cast(ir.Struct)realType(t);
-		return _struct !is null && _struct.templateInstance !is null;
-	}
-
-	void addArgumentsToInstanceEnvironment(LanguagePass lp, ir.Node[] processed, ir.Scope instanceScope,
+	void addArgumentsToNewInstanceEnvironment(LanguagePass lp, ir.Node[] processed, ir.Scope instanceScope,
 	ir.TemplateDefinition td, ir.TemplateInstance ti, NodeAdder addNode)
 	{
 		foreach (param; td.parameters) {
@@ -467,7 +501,17 @@ private:
 
 				// Make sure that the alias we got is a type.
 				assert(a.store.myAlias !is null);
-				if (cast(ir.Type)a.store.myAlias.node is null) {
+				auto typeAlias = a.store.myAlias.node !is null;
+				if (typeAlias) {
+					if (a.store.myAlias.node.nodeType != ir.NodeType.TemplateInstance) {
+						auto type = cast(ir.Type)a.store.myAlias.node;
+						typeAlias = type !is null;
+					} else {
+						auto _ti = a.store.myAlias.node.toTemplateInstanceFast();
+						typeAlias = _ti.kind != ir.TemplateKind.Function;
+					}
+				}
+				if (!typeAlias) {
 					throw makeExpected(arg, "type");
 				}
 			} else if (auto type = cast(ir.Type)processed[i]) {
@@ -496,7 +540,7 @@ private:
 
 alias NodeAdder = void delegate(ir.Node);
 
-ir.TemplateDefinition getTemplateDefinition(ir.Scope current, LanguagePass lp, ir.TemplateInstance ti)
+ir.TemplateDefinition getNewTemplateDefinition(ir.Scope current, LanguagePass lp, ir.TemplateInstance ti)
 {
 	if (!ti.explicitMixin) {
 		throw makeExpected(/*#ref*/ti.loc, "explicit mixin");
@@ -525,7 +569,7 @@ ir.TemplateDefinition getTemplateDefinition(ir.Scope current, LanguagePass lp, i
  * The output list will be the same length as the instance's
  * argument list, and will be in the same order.
  */
-ir.Node[] processTemplateArguments(LanguagePass lp, ir.Scope lookScope, ir.Scope newScope, ir.TemplateDefinition td, ir.TemplateInstance ti)
+ir.Node[] processNewTemplateArguments(LanguagePass lp, ir.Scope lookScope, ir.Scope newScope, ir.TemplateDefinition td, ir.TemplateInstance ti)
 {
 	auto processed = new ir.Node[](ti.arguments.length);
 	// Loop over all arguments.

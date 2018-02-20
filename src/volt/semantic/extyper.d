@@ -154,6 +154,13 @@ ir.Type handleStore(Context ctx, string ident, ref ir.Exp exp, ir.Store store,
 	case EnumDeclaration:
 		return handleEnumDeclarationStore(ctx, ident, /*#ref*/exp, store, child,
 		                                  parent, via);
+	case TemplateInstance:
+		auto ti = store.node.toTemplateInstanceFast();
+		if (ti.kind == ir.TemplateKind.Function) {
+			extypeTemplateInstance(ctx, ti);
+			goto case Function;
+		}
+		goto case;
 	case Template:
 		throw panic(exp, "template used as a value.");
 	case Merge:
@@ -3392,6 +3399,8 @@ void extypeBlockStatement(Context ctx, ir.BlockStatement bs)
 			auto s = cast(ir.Struct) stat;
 			panicAssert(s, s.isActualized);
 			break;
+		case TemplateInstance:
+			throw makeError(/*#ref*/stat.loc, "non top level template function");
 		default:
 			throw panicUnhandled(stat, ir.nodeToString(stat));
 		}
@@ -3433,6 +3442,12 @@ void extypeTemplateDefinition(Context ctx, ir.TemplateDefinition td)
 	if (td._struct is null && td._function is null) {
 		throw makeUnsupported(/*#ref*/td.loc, "non struct/function template definitions");
 	}
+}
+
+void extypeTemplateInstance(Context ctx, ir.TemplateInstance ti)
+{
+	auto tlifter = new TemplateLifter();
+	tlifter.templateLift(ctx.current, ctx.lp, ti);
 }
 
 // Moved here for now.
@@ -4454,7 +4469,13 @@ void doResolveType(Context ctx, ref ir.Type type,
 		auto tr = cast(ir.TypeReference)type;
 
 		if (tr.type is null) {
-			tr.type = lookupType(ctx.lp, ctx.current, tr.id);
+			auto store = lookup(ctx.lp, ctx.current, tr.id);
+			if (store !is null && store.node.nodeType == ir.NodeType.TemplateInstance) {
+				extypeTemplateInstance(ctx, store.node.toTemplateInstanceFast());
+				tr.type = lookupType(ctx.lp, ctx.current, tr.id);
+			} else {
+				tr.type = lookupType(ctx.lp, ctx.current, tr.id, store);
+			}
 		}
 		assert(tr.type !is null);
 
@@ -4766,8 +4787,6 @@ void resolveFunction(Context ctx, ir.Function func)
 	auto done = ctx.lp.startResolving(func);
 	scope (success) done();
 
-	resolveFunctionTemplate(ctx.lp, func);
-
 	if (func.isAutoReturn) {
 		func.type.ret = buildVoid(/*#ref*/func.type.ret.loc);
 	}
@@ -4863,8 +4882,6 @@ void resolveStruct(LanguagePass lp, ir.Struct s)
 
 	s.isResolved = true;
 
-	resolveStructTemplate(lp, s);
-
 	// Resolve fields.
 	foreach (n; s.members.nodes) {
 		auto _t = cast(ir.Type)n;
@@ -4890,26 +4907,6 @@ void resolveStruct(LanguagePass lp, ir.Struct s)
 		createAggregateVar(lp, s);
 		fillInAggregateVar(lp, s);
 	}
-}
-
-void resolveStructTemplate(LanguagePass lp, ir.Struct s)
-{
-	if (s.templateInstance is null) {
-		return;
-	}
-
-	auto tlifter = new TemplateLifter();
-	tlifter.templateLift(/*#ref*/s, lp, s.templateInstance);
-}
-
-void resolveFunctionTemplate(LanguagePass lp, ir.Function func)
-{
-	if (func.templateInstance is null) {
-		return;
-	}
-
-	auto tlifter = new TemplateLifter();
-	tlifter.templateLift(/*#ref*/func, lp, func.templateInstance);
 }
 
 void resolveUnion(LanguagePass lp, ir.Union u)
@@ -5123,26 +5120,28 @@ void tagLiteralType(ir.Exp exp, ir.Type type)
 /*!
  * Remove type parameters from the current scope.
  */
-void cleanTemplateParameters(ir.Scope current, ir.TemplateInstance ti)
+void cleanTemplateParameters(ir.Struct s)
 {
-	if (ti is null) {
+	if (s.templateInstance is null) {
 		return;
 	}
+	cleanTemplateParameters(s.myScope, s.templateInstance.names);
+}
 
-	foreach (tparam; ti.names) {
-		current.remove(tparam);
+void cleanTemplateParameters(ir.Function func)
+{
+	if (func.templateInstance is null) {
+		return;
+	}
+	cleanTemplateParameters(func.myScope, func.templateInstance.names);
+}
+
+void cleanTemplateParameters(ir.Scope theScope, string[] names)
+{
+	foreach (tparam; names) {
+		theScope.remove(tparam);
 	}
 }
-
-/*!
- * Perform tasks that need to happen after a template instance
- * has been processed.
- */
-void postStructTemplateInstantiation(ir.Scope current, ir.TemplateInstance ti)
-{
-	cleanTemplateParameters(current, ti);
-}
-
 
 /*
  *
@@ -5290,6 +5289,13 @@ public:
 		resolveFunction(ctx, func);
 	}
 
+	void transform(ir.Scope current, ir.TemplateInstance ti)
+	{
+		ctx.setupFromScope(current);
+		scope (success) ctx.reset();
+		extypeTemplateInstance(ctx, ti);
+	}
+
 	void transform(ir.Scope current, ir.Attribute a)
 	{
 		ctx.setupFromScope(current);
@@ -5431,7 +5437,7 @@ public:
 	{
 		checkAnonymousVariables(ctx, s);
 		checkDefaultFootors(ctx, s);
-		postStructTemplateInstantiation(s.myScope, s.templateInstance);
+		cleanTemplateParameters(s);
 		ctx.leave(s);
 		return Continue;
 	}
@@ -5509,6 +5515,7 @@ public:
 	override Status enter(ir.Function func)
 	{
 		actualizeFunction(ctx, func);
+		cleanTemplateParameters(func);
 		return ContinueParent;
 	}
 
@@ -5518,6 +5525,25 @@ public:
 		ir.Node nd = n;
 		extypeAssertStatement(ctx, /*#ref*/nd);
 		return ContinueParent;
+	}
+
+	override Status enter(ir.TemplateInstance ti)
+	{
+		if (ti._struct is null && ti._function is null) {
+			extypeTemplateInstance(ctx, ti);
+			switch (ti.kind) with (ir.TemplateKind) {
+			case Struct:
+				accept(ti._struct, ctx.extyper);
+				break;
+			case Function:
+				accept(ti._function, ctx.extyper);
+				break;
+			default:
+				panicAssert(ti, false);
+				break;
+			}
+		}
+		return Continue;
 	}
 
 	override Status visit(ir.TemplateDefinition td)
